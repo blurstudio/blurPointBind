@@ -16,10 +16,12 @@ MObject PointBindDeformer::aTargetGroup;
 
 MObject PointBindDeformer::aIndices;
 MObject PointBindDeformer::aIndexTargets;
+MObject PointBindDeformer::aIndexCounts;
 MObject PointBindDeformer::aTargets;
 
 
 void* PointBindDeformer::creator() { return new PointBindDeformer(); }
+
 MStatus PointBindDeformer::initialize() {
 	MStatus stat;
 	MFnTypedAttribute tAttr;
@@ -34,7 +36,7 @@ MStatus PointBindDeformer::initialize() {
 	if (!stat) return stat;
 
 	// The number of targets per vert
-    aIndexCounts = tAttr.create("indexTargets", "itr", MFnData::kIntArray, &stat);
+    aIndexCounts = tAttr.create("indexCounts", "icn", MFnData::kIntArray, &stat);
 	if (!stat) return stat;
 
 	// The meshes I'm binding to
@@ -50,6 +52,8 @@ MStatus PointBindDeformer::initialize() {
 	cAttr.addChild(aTargets);
 	addAttribute(aTargetGroup);
 
+	stat = attributeAffects(aTargetGroup, outputGeom);
+	if (!stat) return stat;
 	stat = attributeAffects(aTargets, outputGeom);
 	if (!stat) return stat;
 	stat = attributeAffects(aIndexTargets, outputGeom);
@@ -57,8 +61,6 @@ MStatus PointBindDeformer::initialize() {
 	stat = attributeAffects(aIndexCounts, outputGeom);
 	if (!stat) return stat;
 	stat = attributeAffects(aIndices, outputGeom);
-	if (!stat) return stat;
-	stat = attributeAffects(aTargetGroup, outputGeom);
 	if (!stat) return stat;
 
 	//MGlobal::executeCommand("makePaintable -attrType \"multiFloat\" -sm \"deformer\" \"" DEFORMER_NAME "\" \"weights\";");
@@ -125,7 +127,7 @@ MStatus PointBindDeformer::deform(
 	} while (hTarget.next());
 
 	int prevIdx = 0;
-	for (int i = 0; !iter.isDone() && (i < indices.length()); iter.next(), ++i) {
+	for (unsigned i = 0; !iter.isDone() && (i < indices.length()); iter.next(), ++i) {
 		// Add up and average all the point bind info
 		MPoint tar;
 		int curIdx = indexCounts[i];
@@ -147,8 +149,4 @@ MStatus PointBindDeformer::deform(
 	}
     return stat;
 }
-
-
-
-
 

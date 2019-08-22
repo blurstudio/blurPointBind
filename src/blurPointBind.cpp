@@ -80,30 +80,42 @@ MStatus PointBindDeformer::deform(
     float env = envData.asFloat();
 	if (env == 0.0f) return stat;
 
-	MArrayDataHandle hTargetGroupArray = data.inputArrayValue(aTargetGroup);
-	stat = hTargetGroupArray.jumpToElement(multiIndex);
+
+	MArrayDataHandle hTargetGroupArray = data.inputArrayValue(aTargetGroup, &stat);
 	CHECK_MSTATUS_AND_RETURN_IT(stat);
-	MDataHandle hTargetGroupData = hTargetGroupArray.inputValue();
+	unsigned inCount = hTargetGroupArray.elementCount(&stat);
+	if (inCount == 0) return stat;
+	CHECK_MSTATUS_AND_RETURN_IT(stat);
+	stat = hTargetGroupArray.jumpToArrayElement(multiIndex);
+	CHECK_MSTATUS_AND_RETURN_IT(stat);
+	MDataHandle hTargetGroupData = hTargetGroupArray.inputValue(&stat);
+	CHECK_MSTATUS_AND_RETURN_IT(stat);
 
     // Get the Counts
 	MDataHandle hIndexCounts = hTargetGroupData.child(aIndexCounts);
     MObject oIndexCounts = hIndexCounts.data();
-    MFnIntArrayData fnIndexCounts(oIndexCounts, &stat);
-    CHECK_MSTATUS_AND_RETURN_IT(stat);
+	MFnIntArrayData fnIndexCounts;
+	if (oIndexCounts.isNull()) { fnIndexCounts.create(&stat); }
+	else { stat = fnIndexCounts.setObject(oIndexCounts); }
+	CHECK_MSTATUS_AND_RETURN_IT(stat);
 	MIntArray indexCounts = fnIndexCounts.array();
 
     // Get the Target indices
 	MDataHandle hIndexTargets = hTargetGroupData.child(aIndexTargets);
     MObject oIndexTargets = hIndexTargets.data();
-    MFnIntArrayData fnIndexTargets(oIndexTargets, &stat);
-    CHECK_MSTATUS_AND_RETURN_IT(stat);
+	MFnIntArrayData fnIndexTargets;
+	if (oIndexTargets.isNull()) { fnIndexTargets.create(&stat); }
+	else { stat = fnIndexTargets.setObject(oIndexTargets); }
+	CHECK_MSTATUS_AND_RETURN_IT(stat);
 	MIntArray indexTargets = fnIndexTargets.array();
 
     // Get the Vertex indices
 	MDataHandle hIndices = hTargetGroupData.child(aIndices);
     MObject oIndices = hIndices.data();
-    MFnIntArrayData fnIndices(oIndices, &stat);
-    CHECK_MSTATUS_AND_RETURN_IT(stat);
+	MFnIntArrayData fnIndices;
+	if (oIndices.isNull()) { fnIndices.create(&stat); }
+	else { stat = fnIndices.setObject(oIndices); }
+	CHECK_MSTATUS_AND_RETURN_IT(stat);
 	MIntArray indices = fnIndices.array();
 
 	// Get the meshes
@@ -111,12 +123,12 @@ MStatus PointBindDeformer::deform(
 	std::vector<MPointArray> pointStack;
 	MArrayDataHandle hTarget = hTargetGroupData.child(aTargets);
 	if (hTarget.elementCount() == 0) return stat;
-	
+
 	int idx = 0;
 	hTarget.jumpToElement(0); // Jump to the first *filled* element
 	do {
 		int ei = hTarget.elementIndex();
-		if (ei > remap.size()) remap.resize(ei, -1);
+		if (ei+1 > remap.size()) remap.resize(ei+1, -1);
 		remap[ei] = idx++;
 
 		MObject mesh = hTarget.inputValue().asMesh();
@@ -126,27 +138,68 @@ MStatus PointBindDeformer::deform(
 		pointStack.push_back(pts);
 	} while (hTarget.next());
 
-	int prevIdx = 0;
-	for (unsigned i = 0; !iter.isDone() && (i < indices.length()); iter.next(), ++i) {
-		// Add up and average all the point bind info
-		MPoint tar;
-		int curIdx = indexCounts[i];
-		int count = curIdx - prevIdx;
-		for (int id=prevIdx; id < curIdx; ++id){
-			int meshIdx = remap[indexTargets[id]];
-			if (meshIdx == -1) {count--; continue;}
-			tar += pointStack[meshIdx][indices[id]];
-		}
-		if (count < 1) continue;
-		tar = (MVector)tar / count;
-		prevIdx = curIdx;
 
-		// Apply the envelope and the weights
-        MPoint pt = iter.position();
+
+
+
+	// Test values
+	indexCounts.append(0); // starter index // TODO: Automatically add this value
+	indexCounts.append(0); // vert index 0
+	indexCounts.append(0);
+	indexCounts.append(0);
+	indexCounts.append(1); indices.append(0); // vert index 3
+	indexCounts.append(2); indices.append(1);
+	indexCounts.append(3); indices.append(2);
+	indexCounts.append(4); indices.append(3);
+	indexCounts.append(5); indices.append(4);
+	indexCounts.append(6); indices.append(5);
+	indexCounts.append(7); indices.append(6);
+	indexCounts.append(8); indices.append(7);
+	indexCounts.append(9); indices.append(8);
+	indexCounts.append(10); indices.append(9);
+	indexCounts.append(11); indices.append(10);
+	indexCounts.append(12); indices.append(11);
+	indexCounts.append(13); indices.append(12);
+	indexCounts.append(14); indices.append(13);
+	indexCounts.append(15); indices.append(14); // vert index 17
+	indexCounts.append(15);
+	indexCounts.append(15);
+	indexCounts.append(15);
+	indexCounts.append(15);
+	indexCounts.append(15);
+	indexCounts.append(15);
+	indexCounts.append(16); indices.append(15);
+	indexCounts.append(17); indices.append(16);
+
+	for (int t = 0; t < indices.length(); ++t) {
+		indexTargets.append(0);
+	}
+
+
+
+	// Finally do the deformation
+	unsigned i = 1, ptr = 0;
+	for (; !iter.isDone(); iter.next(), ++i) {
+		unsigned ic = indexCounts[i] - indexCounts[i - 1];
+		if (ic == 0) continue;
+		// TODO: Deal with spaces
+		MPoint tar;
+		for (; (ptr < indexCounts[i]) && (ptr < indices.length()); ++ptr) {
+			unsigned meshIdx = indexTargets[ptr];
+			tar += pointStack[remap[meshIdx]][indices[ptr]];
+		}
+
+		tar = (MVector)tar / ic;
+		MPoint pt = iter.position();
         float w = weightValue(data, multiIndex, iter.index()) * env;
 		pt += (tar - pt) * w;
         iter.setPosition(pt);
+		if (ptr >= indices.length()) break;
 	}
+
+
+
+
     return stat;
 }
 

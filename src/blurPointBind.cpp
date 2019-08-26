@@ -18,6 +18,8 @@ MObject PointBindDeformer::aIndices;
 MObject PointBindDeformer::aIndexTargets;
 MObject PointBindDeformer::aIndexCounts;
 MObject PointBindDeformer::aTargets;
+MObject PointBindDeformer::aTargetMesh;
+MObject PointBindDeformer::aTargetWorld;
 
 
 void* PointBindDeformer::creator() { return new PointBindDeformer(); }
@@ -25,7 +27,9 @@ void* PointBindDeformer::creator() { return new PointBindDeformer(); }
 MStatus PointBindDeformer::initialize() {
 	MStatus stat;
 	MFnTypedAttribute tAttr;
+	MFnNumericAttribute nAttr;
 	MFnCompoundAttribute cAttr;
+
 
 	// The indices to map to
     aIndices = tAttr.create("indexes", "idx", MFnData::kIntArray, &stat);
@@ -40,9 +44,17 @@ MStatus PointBindDeformer::initialize() {
 	if (!stat) return stat;
 
 	// The meshes I'm binding to
-    aTargets = tAttr.create("target", "tar", MFnData::kMesh, &stat);
+    aTargetMesh = tAttr.create("targetMesh", "tam", MFnData::kMesh, &stat);
 	if (!stat) return stat;
-    tAttr.setArray(true);
+
+	// Whether to bind each mesh in worldspace
+	aTargetWorld = nAttr.create("targetWorld", "taw", MFnNumericData::kBoolean, false, &stat);
+	if (!stat) return stat;
+
+	aTargets = cAttr.create("targets", "targets");
+	cAttr.setArray(true);
+	cAttr.addChild(aTargetMesh);
+	cAttr.addChild(aTargetWorld);
 
 	aTargetGroup = cAttr.create("targetGroup", "targetGroup");
 	cAttr.setArray(true);
@@ -55,6 +67,10 @@ MStatus PointBindDeformer::initialize() {
 	stat = attributeAffects(aTargetGroup, outputGeom);
 	if (!stat) return stat;
 	stat = attributeAffects(aTargets, outputGeom);
+	if (!stat) return stat;
+	stat = attributeAffects(aTargetMesh, outputGeom);
+	if (!stat) return stat;
+	stat = attributeAffects(aTargetWorld, outputGeom);
 	if (!stat) return stat;
 	stat = attributeAffects(aIndexTargets, outputGeom);
 	if (!stat) return stat;
@@ -79,7 +95,6 @@ MStatus PointBindDeformer::deform(
 	if (!stat) return stat;
     float env = envData.asFloat();
 	if (env == 0.0f) return stat;
-
 
 	MArrayDataHandle hTargetGroupArray = data.inputArrayValue(aTargetGroup, &stat);
 	CHECK_MSTATUS_AND_RETURN_IT(stat);
@@ -118,76 +133,96 @@ MStatus PointBindDeformer::deform(
 	CHECK_MSTATUS_AND_RETURN_IT(stat);
 	MIntArray indices = fnIndices.array();
 
-	// Get the meshes
-	std::vector<int> remap;
+	MArrayDataHandle hTargets = hTargetGroupData.child(aTargets);
+	unsigned cnxMeshes = hTargets.elementCount();
+
 	std::vector<MPointArray> pointStack;
-	MArrayDataHandle hTarget = hTargetGroupData.child(aTargets);
-	if (hTarget.elementCount() == 0) return stat;
+	std::vector<std::vector<MPoint>> backStack;
+	std::vector<bool> worldStack;
 
-	int idx = 0;
-	hTarget.jumpToElement(0); // Jump to the first *filled* element
-	do {
-		int ei = hTarget.elementIndex();
-		if (ei+1 > remap.size()) remap.resize(ei+1, -1);
-		remap[ei] = idx++;
+	if (cnxMeshes == 0) return stat;
+	for (unsigned idx = 0; idx < cnxMeshes; ++idx) {
+		hTargets.jumpToElement(idx);
+		int ei = hTargets.elementIndex();
+		MDataHandle hTarget = hTargets.inputValue();
 
-		MObject mesh = hTarget.inputValue().asMesh();
+		MDataHandle hTarWorld = hTarget.child(aTargetWorld);
+		bool world = hTarWorld.asBool();
+		MSpace::Space space = (world) ? MSpace::kWorld : MSpace::kObject;
+
+		MDataHandle hTarMesh = hTarget.child(aTargetMesh);
+		MObject mesh = hTarMesh.asMesh();
+		if (mesh.isNull())
+			continue;
+
+		// Wait 'till after the check to allocate
+		worldStack.resize(ei + 1);
+		pointStack.resize(ei + 1);
+		backStack.resize(ei + 1);
+		worldStack[ei] = world;
+
 		MFnMesh meshFn(mesh);
 		MPointArray pts;
-		meshFn.getPoints(pts);
-		pointStack.push_back(pts);
-	} while (hTarget.next());
+		meshFn.getPoints(pts, space);
+		pointStack[ei] = pts;
+	}
 
+	if (pointStack.size() == 0)
+		return stat;
+	
 
 
 
 
 	// Test values
-	indexCounts.append(0); // starter index // TODO: Automatically add this value
 	indexCounts.append(0); // vert index 0
 	indexCounts.append(0);
 	indexCounts.append(0);
-	indexCounts.append(1); indices.append(0); // vert index 3
-	indexCounts.append(2); indices.append(1);
-	indexCounts.append(3); indices.append(2);
-	indexCounts.append(4); indices.append(3);
-	indexCounts.append(5); indices.append(4);
-	indexCounts.append(6); indices.append(5);
-	indexCounts.append(7); indices.append(6);
-	indexCounts.append(8); indices.append(7);
-	indexCounts.append(9); indices.append(8);
-	indexCounts.append(10); indices.append(9);
-	indexCounts.append(11); indices.append(10);
-	indexCounts.append(12); indices.append(11);
-	indexCounts.append(13); indices.append(12);
-	indexCounts.append(14); indices.append(13);
-	indexCounts.append(15); indices.append(14); // vert index 17
-	indexCounts.append(15);
-	indexCounts.append(15);
-	indexCounts.append(15);
-	indexCounts.append(15);
-	indexCounts.append(15);
-	indexCounts.append(15);
-	indexCounts.append(16); indices.append(15);
-	indexCounts.append(17); indices.append(16);
+	indexCounts.append(1); indices.append(0); indexTargets.append(0);
+	indexCounts.append(1); indices.append(1); indexTargets.append(0);
+	indexCounts.append(1); indices.append(2); indexTargets.append(0);
+	indexCounts.append(1); indices.append(3); indexTargets.append(0);
+	indexCounts.append(1); indices.append(4); indexTargets.append(0);
+	indexCounts.append(1); indices.append(5); indexTargets.append(0);
+	indexCounts.append(1); indices.append(6); indexTargets.append(0);
+	indexCounts.append(1); indices.append(7); indexTargets.append(0);
+	indexCounts.append(1); indices.append(8); indexTargets.append(0);
+	indexCounts.append(1); indices.append(9); indexTargets.append(0);
+	indexCounts.append(1); indices.append(10); indexTargets.append(0);
+	indexCounts.append(1); indices.append(11); indexTargets.append(0);
+	indexCounts.append(1); indices.append(12); indexTargets.append(0);
+	indexCounts.append(1); indices.append(13); indexTargets.append(0);
+	indexCounts.append(1); indices.append(14); indexTargets.append(0);
+	indexCounts.append(0);
+	indexCounts.append(0);
+	indexCounts.append(0);
+	indexCounts.append(0);
+	indexCounts.append(0);
+	indexCounts.append(0);
+	indexCounts.append(1); indices.append(15); indexTargets.append(0);
+	indexCounts.append(1); indices.append(16); indexTargets.append(0);
 
-	for (int t = 0; t < indices.length(); ++t) {
-		indexTargets.append(0);
-	}
-
-
-
+	
 	// Finally do the deformation
-	unsigned i = 1, ptr = 0;
+	MMatrix minv = m.inverse();
+	unsigned i = 0, ptr = 0;
+	unsigned running=0; // running count
 	for (; !iter.isDone(); iter.next(), ++i) {
-		unsigned ic = indexCounts[i] - indexCounts[i - 1];
+		int ic = indexCounts[i];
 		if (ic == 0) continue;
-		// TODO: Deal with spaces
+		running += ic;
 		MPoint tar;
-		for (; (ptr < indexCounts[i]) && (ptr < indices.length()); ++ptr) {
-			unsigned meshIdx = indexTargets[ptr];
-			tar += pointStack[remap[meshIdx]][indices[ptr]];
+		for (; (ptr < running) && (ptr < indices.length()); ++ptr) {
+			int itar = indexTargets[ptr];
+			MPointArray& pst = pointStack[itar];
+			if (pst.length() == 0) {
+				ic -= 1;
+				continue;
+			}
+			MPoint& pvl = pst[indices[ptr]];
+			tar += (worldStack[itar]) ? pvl * minv : pvl;
 		}
+		if (ic < 1) continue;
 
 		tar = (MVector)tar / ic;
 		MPoint pt = iter.position();
@@ -196,9 +231,6 @@ MStatus PointBindDeformer::deform(
         iter.setPosition(pt);
 		if (ptr >= indices.length()) break;
 	}
-
-
-
 
     return stat;
 }

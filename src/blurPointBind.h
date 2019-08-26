@@ -30,5 +30,7 @@ public:
 	static MObject aIndexTargets;
 	static MObject aIndexCounts;
 	static MObject aTargets;
+	static MObject aTargetMesh;
+	static MObject aTargetWorld;
 };
 

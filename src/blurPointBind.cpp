@@ -128,7 +128,6 @@ MStatus PointBindDeformer::deform(
 	}
 	if (indexTargets.length() == 0) return stat;
 
-
     // Get the Vertex indices
 	MDataHandle hIndices = hTargetGroupData.child(aIndices);
     MObject oIndices = hIndices.data();
@@ -172,8 +171,6 @@ MStatus PointBindDeformer::deform(
 		pointStack[ei] = pts;
 	}
 
-	MPointArray allPos;
-	iter.allPositions(allPos);
 
 	// Finally do the deformation
 	MMatrix minv = m.inverse();
@@ -193,18 +190,20 @@ MStatus PointBindDeformer::deform(
 			MPoint& pvl = pst[indices[ptr]];
 			tar += (worldStack[itar]) ? pvl * minv : pvl;
 		}
-		if (ic < 1) continue;
+		if (ic < 1)
+			continue;
+		else if (ic > 1)
+			tar = tar / ic;
 
-		tar = (MVector)tar / ic;
-		int itIdx = iter.index();
-		MPoint pt = allPos[itIdx];
         float w = weightValue(data, multiIndex, iter.index()) * env;
-		pt += (tar - pt) * w;
-		allPos[itIdx] = pt;
+		if (w > 0.0f) {
+			MPoint pt = iter.position();
+			pt += (tar - pt) * w;
+			iter.setPosition(pt);
+		}
 		if (ptr >= indices.length()) break;
 	}
 
-	iter.setAllPositions(allPos);
     return stat;
 }
 

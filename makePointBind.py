@@ -175,9 +175,9 @@ def buildPointBind(mesh, controllers, worldSpace=False, tolerance=0.01):
 from reloadPlugin import reloadPlugin, RELEASE_TYPES
 base = r'D:\Users\tyler\Documents\GitHub\Plugins\blurPointBind'
 plugName = 'blurPointBind'
-openFile = r'D:\Users\tyler\Documents\GitHub\Plugins\blurPointBind\Useful\pbTest4.ma'
-reloadPlugin(base, plugName, "RelWithDebInfo", openFile=openFile)
-buildPointBind('Body', ['Head'], worldSpace=False, tolerance=0.01)
+openFile = r'D:\Users\tyler\Documents\GitHub\Plugins\blurPointBind\Useful\pbTest5.ma'
+reloadPlugin(base, plugName, "Release", openFile=openFile)
+#buildPointBind('Body', ['Head'], worldSpace=False, tolerance=0.01)
 
 
 

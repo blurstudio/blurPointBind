@@ -1,138 +1,9 @@
+
 from maya import OpenMaya as om, cmds
 from dcc.maya.mayaToNumpy import mayaToNumpy, numpyToMaya
 from scipy.spatial import cKDTree as KDTree
 import numpy as np
-from bisect import bisect_left
-
-
-def buildMergedMObject(meshShapes, worldSpace=False):
-	''' Merge the given meshes into a single MObject
-	Probably not used as part of the point bind, but makes it easy to
-	build one octree on all the meshes you're binding to
-	
-	Arguments:
-		meshShapes ([str, ...]): List of mesh ShapeNode names
-		worldSpace (bool): Whether to merge in worldSpace
-
-	Returns:
-		MObject : The merged MObject
-		MFnMesh : The MeshFn attached to the MObject
-	'''
-
-
-	pointses, faceses, countses = [], [], []
-
-	for shapeName in meshShapes:
-		sl = om.MSelectionList()
-		sl.add(shapeName)
-		mesh = om.MDagPath()
-		sl.getDagPath(0, mesh)
-		meshFn = om.MFnMesh(mesh)
-		mpa = om.MPointArray()
-		space = om.MSpace.kWorld if worldSpace else om.MSpace.kObject
-		meshFn.getPoints(mpa, space)
-
-		counts = []
-		faces = []
-		vIdx = om.MIntArray()
-		for i in range(meshFn.numPolygons()):
-			meshFn.getPolygonVertices(i, vIdx)
-			counts.append(vIdx.length())
-			faces.append(mayaToNumpy(vIdx))
-
-		pointses.append(mayaToNumpy(mpa))
-		countses.append(np.array(counts))
-		faceses.append(np.concatenate(faces))
-
-	pointses = numpyToMaya(np.concatenate(pointses), om.MPointArray)
-	faceses = numpyToMaya(np.concatenate(faceses), om.MIntArray)
-	countses = numpyToMaya(np.concatenate(countses), om.MIntArray)
-
-	mergedFn = om.MFnMesh()
-	merged = mergedFn.create(len(pointses), len(countses), pointses, countses, faceses)
-
-	return merged, mergedFn
-
-def projectClosestPoints(meshShapeName, ontoShapeName, worldSpace=False, tolerance=0.01):
-	''' Get the closest points from one mesh on another, and get a simple approximation
-	This is a nice piece of code, but we won't use it for the point bind
-
-	Args:
-		meshShapeName (str): The mesh shape node whose points get looped over.
-		ontoShapeName (str): The mesh shape node that we find the closest point on
-		worldSpace (bool): Whether to do this in worldspace
-		tolerance (float): A tolerance for the barycentric approximation
-	
-	Returns:
-		[[MPoint, ...], ...]: The closest (up to 3) MPoints per vertex
-	
-	'''
-	sl = om.MSelectionList()
-	sl.add(meshShapeName)
-	mesh = om.MDagPath()
-	sl.getDagPath(0, mesh)
-	meshFn = om.MFnMesh(mesh)
-	mpa = om.MPointArray()
-	space = om.MSpace.kWorld if worldSpace else om.MSpace.kObject
-	meshFn.getPoints(mpa, space)
-
-
-	sl = om.MSelectionList()
-	sl.add(ontoShapeName)
-	onto = om.MDagPath()
-	sl.getDagPath(0, onto)
-	wmat = onto.inclusiveMatrix() if worldSpace else om.MMatrix()
-
-	targetWMatInv = wmat.inverse()
-	octree = om.MMeshIntersector()
-	octree.create(onto.node())
-	ontoFn = om.MFnMesh(onto)
-
-
-	# Build the return-by-reference script utils
-	uUtil = om.MScriptUtil()
-	uUtil.createFromDouble(0.0)
-	uPtr = uUtil.asFloatPtr()
-	vUtil = om.MScriptUtil()
-	vUtil.createFromDouble(0.0)
-	vPtr = vUtil.asFloatPtr()
-	triUtil = om.MScriptUtil()
-	triUtil.createFromList([0, 0, 0], 3)
-	triPtr = triUtil.asIntPtr()
-
-	out = []
-	for idx in xrange(mpa.length()):
-		tpt = mpa[idx] * targetWMatInv
-		res = om.MPointOnMesh() # result
-		octree.getClosestPoint(tpt, res, 10.0)
-
-		res.getBarycentricCoords(uPtr, vPtr)
-
-		uvw = [uUtil.getFloat(uPtr), vUtil.getFloat(vPtr), 0.0]
-		uvw[2] = 1.0 - sum(uvw)
-
-		faceIdx = res.faceIndex()
-		triIdx = res.triangleIndex()
-		ontoFn.getPolygonTriangleVertices(faceIdx, triIdx, triPtr)
-		triVerts = [triUtil.getIntArrayItem(triPtr, i) for i in range(3)]
-
-		maxVal = max(uvw)
-		minVal = min(uvw)
-		if (1.0 - maxVal) < tolerance:
-			maxIdx = uvw.index(maxVal)
-			triVerts = [triVerts[maxIdx]]
-		elif minVal < tolerance:
-			minIdx = uvw.index(minVal)
-			triVerts.pop(minIdx)
-		out.append(triVerts)
-
-	return out
-
-
-
-
-
-
+from bisect import bisect_right
 
 def getMeshPoints(shapeName, worldSpace=False):
 	''' Get the points from the given mesh
@@ -197,7 +68,8 @@ def buildPointBindData(deformerMeshes, deformerWSs, boundMesh, boundWS, toleranc
 
 	Returns:
 		counts (np.array): The number of vertices to bind to per boundMesh vertex
-		meshes (np.array): For each bound vertex, the index of the deformerMesh
+		targets (np.array): For each bound vertex, the index of the deformerMesh
+		idxs (np.array): For each bound vertex, the index of the vertex to bind to
 	'''
 	deformerPoints, pointCounts = getAllPoints(deformerMeshes, worldSpaces=deformerWSs)
 	boundPoints = getMeshPoints(boundMesh, worldSpace=boundWS)
@@ -205,34 +77,41 @@ def buildPointBindData(deformerMeshes, deformerWSs, boundMesh, boundWS, toleranc
 	runningCounts = np.cumsum(pointCounts).tolist()
 	runningCounts.insert(0, 0) # So I can subtract the runningCount from the vertex index directly
 
-	# loop through the nClosest
-	# check for values that == len(deformerPoints)
-	# check for points between values in the running sum of pointCounts
-	# translate the data properly into chunks
-	# turn into maya values and return
+	if len(nClosest.shape) == 1:
+		# Make sure nClosest is a 2d array
+		nClosest = nClosest[..., None]
 
 	invalidIdx = len(deformerPoints)
-	meshes, idxs, counts = [], [], []
+	targets, idxs, counts = [], [], []
+	lastNonzero = None
 	for nc in nClosest:
 		count = 0
 		for v in nc:
 			if v == invalidIdx: continue
 			# Find the insert index for v in runningCounts
-			meshIdx = bisect_left(runningCounts, v)
+			meshIdx = bisect_right(runningCounts, v)
 			count += 1
-			meshes.append(meshIdx-1) # have to subtract one because of the insert(0, 0)
-			idxs.append(v - runningCounts[meshIdx])
+			targets.append(meshIdx-1) # have to subtract one because of the insert(0, 0)
+			idxs.append(v - runningCounts[meshIdx-1])
 		counts.append(count)
-	return np.array(counts), np.array(meshes), np.array(idxs)
+		if count > 0:
+			# This allows the deformer to bail early
+			# if there aren't any more indices to compute
+			lastNonzero = len(counts)
+	counts = counts[:lastNonzero]
+	return np.array(counts), np.array(targets), np.array(idxs)
 
-
-
-def _getPlug(plugName):
+def setPlugData(plugName, data):
 	sl = om.MSelectionList()
 	sl.add(plugName)
 	plug = om.MPlug()
 	sl.getPlug(0, plug)
-	return plug.asMObject()
+
+	mfn = om.MFnIntArrayData()
+	mObj = mfn.create()
+	mfn.set(numpyToMaya(data, om.MIntArray))
+	plug.setMObject(mObj)
+
 
 def setPointBindData(deformer, counts, targets, idxs, meshes, worldSpaces, dfmIdx=0):
 	''' Set the data on the blurPointBind deformer node
@@ -248,15 +127,10 @@ def setPointBindData(deformer, counts, targets, idxs, meshes, worldSpaces, dfmId
 	'''
 	_grp = '{0}.targetGroup[{1}]'.format(deformer, dfmIdx)
 
-	# Build the plug names
-	iTarPlug = _getPlug('{0}.indexTargets'.format(_grp))
-	iCountPlug = _getPlug('{0}.indexCounts'.format(_grp))
-	indexPlug = _getPlug('{0}.indexes'.format(_grp))
-
 	# Set the data on the plugs
-	om.MFnIntArrayData(iTarPlug).set(numpyToMaya(targets, om.MIntArray))
-	om.MFnIntArrayData(iCountPlug).set(numpyToMaya(counts, om.MIntArray))
-	om.MFnIntArrayData(indexPlug).set(numpyToMaya(idxs, om.MIntArray))
+	setPlugData('{0}.indexTargets'.format(_grp), targets)
+	setPlugData('{0}.indexCounts'.format(_grp), counts)
+	setPlugData('{0}.indexes'.format(_grp), idxs)
 
 	# Connect the meshes and set the worldspace values
 	for meshIdx, (mesh, ws) in enumerate(zip(meshes, worldSpaces)):
@@ -265,7 +139,6 @@ def setPointBindData(deformer, counts, targets, idxs, meshes, worldSpaces, dfmId
 		wsPlug = '{0}.targets[{1}].targetWorld'.format(_grp, meshIdx)
 		cmds.connectAttr(meshOut, meshPlug, force=1)
 		cmds.setAttr(wsPlug, ws)
-
 
 def buildPointBind(mesh, controllers, worldSpace=False, tolerance=0.01):
 	''' Build and connect the blurPointBind deformer
@@ -294,8 +167,18 @@ def buildPointBind(mesh, controllers, worldSpace=False, tolerance=0.01):
 	if not cmds.pluginInfo("blurPointBind", query=True, loaded=True):
 		cmds.loadPlugin("blurPointBind")
 
-	deformer = cmds.deformer(mesh, type="blurPointBind")
+	deformer = cmds.deformer(mesh, type="blurPointBind")[0]
 	deformerWSs = [worldSpace] * len(ctrlMeshes)
 	counts, targets, idxs = buildPointBindData(ctrlMeshes, deformerWSs, mesh, worldSpace, tolerance=tolerance)
 	setPointBindData(deformer, counts, targets, idxs, ctrlMeshes, deformerWSs, dfmIdx=0)
+
+from reloadPlugin import reloadPlugin, RELEASE_TYPES
+base = r'D:\Users\tyler\Documents\GitHub\Plugins\blurPointBind'
+plugName = 'blurPointBind'
+openFile = r'D:\Users\tyler\Documents\GitHub\Plugins\blurPointBind\Useful\pbTest4.ma'
+reloadPlugin(base, plugName, "RelWithDebInfo", openFile=openFile)
+buildPointBind('Body', ['Head'], worldSpace=False, tolerance=0.01)
+
+
+
 

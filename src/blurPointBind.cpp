@@ -109,35 +109,41 @@ MStatus PointBindDeformer::deform(
     // Get the Counts
 	MDataHandle hIndexCounts = hTargetGroupData.child(aIndexCounts);
     MObject oIndexCounts = hIndexCounts.data();
-	MFnIntArrayData fnIndexCounts;
-	if (oIndexCounts.isNull()) { fnIndexCounts.create(&stat); }
-	else { stat = fnIndexCounts.setObject(oIndexCounts); }
-	CHECK_MSTATUS_AND_RETURN_IT(stat);
-	MIntArray indexCounts = fnIndexCounts.array();
+	MIntArray indexCounts;
+	if (!oIndexCounts.isNull()) {
+		MFnIntArrayData fnIndexCounts(oIndexCounts, &stat);
+		CHECK_MSTATUS_AND_RETURN_IT(stat);
+		indexCounts = fnIndexCounts.array();
+	}
+	if (indexCounts.length() == 0) return stat;
 
     // Get the Target indices
 	MDataHandle hIndexTargets = hTargetGroupData.child(aIndexTargets);
     MObject oIndexTargets = hIndexTargets.data();
-	MFnIntArrayData fnIndexTargets;
-	if (oIndexTargets.isNull()) { fnIndexTargets.create(&stat); }
-	else { stat = fnIndexTargets.setObject(oIndexTargets); }
-	CHECK_MSTATUS_AND_RETURN_IT(stat);
-	MIntArray indexTargets = fnIndexTargets.array();
+	MIntArray indexTargets;
+	if (!oIndexTargets.isNull()) {
+		MFnIntArrayData fnIndexTargets(oIndexTargets, &stat);
+		CHECK_MSTATUS_AND_RETURN_IT(stat);
+		indexTargets = fnIndexTargets.array();
+	}
+	if (indexTargets.length() == 0) return stat;
+
 
     // Get the Vertex indices
 	MDataHandle hIndices = hTargetGroupData.child(aIndices);
     MObject oIndices = hIndices.data();
-	MFnIntArrayData fnIndices;
-	if (oIndices.isNull()) { fnIndices.create(&stat); }
-	else { stat = fnIndices.setObject(oIndices); }
-	CHECK_MSTATUS_AND_RETURN_IT(stat);
-	MIntArray indices = fnIndices.array();
+	MIntArray indices;
+	if (!oIndices.isNull()) {
+		MFnIntArrayData fnIndices(oIndices, &stat);
+		CHECK_MSTATUS_AND_RETURN_IT(stat);
+		indices = fnIndices.array();
+	}
+	if (indices.length() == 0) return stat;
 
 	MArrayDataHandle hTargets = hTargetGroupData.child(aTargets);
 	unsigned cnxMeshes = hTargets.elementCount();
 
 	std::vector<MPointArray> pointStack;
-	std::vector<std::vector<MPoint>> backStack;
 	std::vector<bool> worldStack;
 
 	if (cnxMeshes == 0) return stat;
@@ -158,7 +164,6 @@ MStatus PointBindDeformer::deform(
 		// Wait 'till after the check to allocate
 		worldStack.resize(ei + 1);
 		pointStack.resize(ei + 1);
-		backStack.resize(ei + 1);
 		worldStack[ei] = world;
 
 		MFnMesh meshFn(mesh);
@@ -167,52 +172,18 @@ MStatus PointBindDeformer::deform(
 		pointStack[ei] = pts;
 	}
 
-	if (pointStack.size() == 0)
-		return stat;
-	
+	MPointArray allPos;
+	iter.allPositions(allPos);
 
-
-
-
-	// Test values
-	indexCounts.append(0); // vert index 0
-	indexCounts.append(0);
-	indexCounts.append(0);
-	indexCounts.append(1); indices.append(0); indexTargets.append(0);
-	indexCounts.append(1); indices.append(1); indexTargets.append(0);
-	indexCounts.append(1); indices.append(2); indexTargets.append(0);
-	indexCounts.append(1); indices.append(3); indexTargets.append(0);
-	indexCounts.append(1); indices.append(4); indexTargets.append(0);
-	indexCounts.append(1); indices.append(5); indexTargets.append(0);
-	indexCounts.append(1); indices.append(6); indexTargets.append(0);
-	indexCounts.append(1); indices.append(7); indexTargets.append(0);
-	indexCounts.append(1); indices.append(8); indexTargets.append(0);
-	indexCounts.append(1); indices.append(9); indexTargets.append(0);
-	indexCounts.append(1); indices.append(10); indexTargets.append(0);
-	indexCounts.append(1); indices.append(11); indexTargets.append(0);
-	indexCounts.append(1); indices.append(12); indexTargets.append(0);
-	indexCounts.append(1); indices.append(13); indexTargets.append(0);
-	indexCounts.append(1); indices.append(14); indexTargets.append(0);
-	indexCounts.append(0);
-	indexCounts.append(0);
-	indexCounts.append(0);
-	indexCounts.append(0);
-	indexCounts.append(0);
-	indexCounts.append(0);
-	indexCounts.append(1); indices.append(15); indexTargets.append(0);
-	indexCounts.append(1); indices.append(16); indexTargets.append(0);
-
-	
 	// Finally do the deformation
 	MMatrix minv = m.inverse();
-	unsigned i = 0, ptr = 0;
-	unsigned running=0; // running count
-	for (; !iter.isDone(); iter.next(), ++i) {
+	unsigned ptr = 0, running = 0; // running count
+	for (unsigned i = 0; (!iter.isDone()) && (i < indexCounts.length()); iter.next(), ++i) {
 		int ic = indexCounts[i];
 		if (ic == 0) continue;
 		running += ic;
 		MPoint tar;
-		for (; (ptr < running) && (ptr < indices.length()); ++ptr) {
+		for (; (ptr < running) && (ptr < indices.length()) && (ptr < indexTargets.length()); ++ptr) {
 			int itar = indexTargets[ptr];
 			MPointArray& pst = pointStack[itar];
 			if (pst.length() == 0) {
@@ -225,13 +196,15 @@ MStatus PointBindDeformer::deform(
 		if (ic < 1) continue;
 
 		tar = (MVector)tar / ic;
-		MPoint pt = iter.position();
+		int itIdx = iter.index();
+		MPoint pt = allPos[itIdx];
         float w = weightValue(data, multiIndex, iter.index()) * env;
 		pt += (tar - pt) * w;
-        iter.setPosition(pt);
+		allPos[itIdx] = pt;
 		if (ptr >= indices.length()) break;
 	}
 
+	iter.setAllPositions(allPos);
     return stat;
 }
 

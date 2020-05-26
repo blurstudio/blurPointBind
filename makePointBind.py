@@ -172,11 +172,11 @@ def buildPointBind(mesh, controllers, worldSpace=False, tolerance=0.01):
 	counts, targets, idxs = buildPointBindData(ctrlMeshes, deformerWSs, mesh, worldSpace, tolerance=tolerance)
 	setPointBindData(deformer, counts, targets, idxs, ctrlMeshes, deformerWSs, dfmIdx=0)
 
-from reloadPlugin import reloadPlugin, RELEASE_TYPES
-base = r'D:\Users\tyler\Documents\GitHub\Plugins\blurPointBind'
-plugName = 'blurPointBind'
-openFile = r'D:\Users\tyler\Documents\GitHub\Plugins\blurPointBind\Useful\pbTest5.ma'
-reloadPlugin(base, plugName, "Release", openFile=openFile)
+#from reloadPlugin import reloadPlugin, RELEASE_TYPES
+#base = r'D:\Users\tyler\Documents\GitHub\Plugins\blurPointBind'
+#plugName = 'blurPointBind'
+#openFile = r'D:\Users\tyler\Documents\GitHub\Plugins\blurPointBind\Useful\pbTest5.ma'
+#reloadPlugin(base, plugName, "Release", openFile=openFile)
 #buildPointBind('Body', ['Head'], worldSpace=False, tolerance=0.01)
 
 

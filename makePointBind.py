@@ -122,8 +122,8 @@ def setPointBindData(deformer, counts, targets, idxs, meshes, worldSpaces, dfmId
 		targets (np.array): The index of the mesh to bind to per-index
 		idxs (np.array): The vertex index to bind to
 		meshes ([str, ...]): The meshes to connect to the deformer
+		worldSpaces ([bool, ...]): Whether to bind in worldSpace per mesh
 		dfmIdx (int): The mesh index of the deformed object. Defaults to 0
-		worldSpace (bool): Whether to bind in worldSpace
 	'''
 	_grp = '{0}.targetGroup[{1}]'.format(deformer, dfmIdx)
 
